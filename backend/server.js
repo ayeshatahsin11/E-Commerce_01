@@ -3,12 +3,15 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
 const cookieParser = require("cookie-parser");
 const connectDB = require("./src/config/db");
+const errorHandler = require("./src/middleware/errorHandler");
 
 const app = express();
 
 // Middlewares
+app.use(helmet());
 app.use(cors({ origin: process.env.CLIENT_URL, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
@@ -17,6 +20,12 @@ app.use(cookieParser());
 app.get("/", (req, res) => {
   res.json({ message: "E-commerce API is running" });
 });
+app.use("/api/auth", require("./src/routes/authRoutes"));
+app.use("/api/admin", require("./src/routes/adminRoutes"));
+
+// 404 + error handler (always last)
+app.use((req, res) => res.status(404).json({ success: false, message: "Route not found" }));
+app.use(errorHandler);
 
 // Start server after DB connects
 const PORT = process.env.PORT || 5000;
