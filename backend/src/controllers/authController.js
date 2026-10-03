@@ -2,9 +2,10 @@ const User = require("../models/User");
 const asyncHandler = require("../utils/asyncHandler");
 const { sendToken, cookieOptions } = require("../utils/sendToken");
 
+
 // POST /api/auth/register
 exports.register = asyncHandler(async (req, res) => {
-  const { name, email, password, role, shopName } = req.body;
+ const { name, email, password, role, shopName } = req.body || {};   // in register
 
   if (!name || !email || !password) {
     return res.status(400).json({ success: false, message: "Name, email and password are required" });
@@ -31,7 +32,7 @@ exports.register = asyncHandler(async (req, res) => {
 
 // POST /api/auth/login
 exports.login = asyncHandler(async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password } = req.body || {};      
 
   if (!email || !password) {
     return res.status(400).json({ success: false, message: "Email and password are required" });
