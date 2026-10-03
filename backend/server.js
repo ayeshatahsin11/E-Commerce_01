@@ -22,6 +22,8 @@ app.get("/", (req, res) => {
 });
 app.use("/api/auth", require("./src/routes/authRoutes"));
 app.use("/api/admin", require("./src/routes/adminRoutes"));
+app.use("/api/categories", require("./src/routes/categoryRoutes"));
+app.use("/api/products", require("./src/routes/productRoutes"));
 
 // 404 + error handler (always last)
 app.use((req, res) => res.status(404).json({ success: false, message: "Route not found" }));
