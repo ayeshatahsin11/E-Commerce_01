@@ -1,6 +1,7 @@
 // ================ main server file ======================= //
 
 require("dotenv").config();
+const path = require("path");
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -15,6 +16,16 @@ app.use(helmet());
 app.use(cors({ origin: process.env.CLIENT_URL, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
+
+// Uploaded images (cross-origin allowed so the Next.js frontend can display them)
+app.use(
+  "/uploads",
+  (req, res, next) => {
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    next();
+  },
+  express.static(path.join(__dirname, "uploads"))
+);
 
 // Routes
 app.get("/", (req, res) => {

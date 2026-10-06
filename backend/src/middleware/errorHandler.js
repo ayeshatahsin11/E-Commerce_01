@@ -12,6 +12,12 @@ const errorHandler = (err, req, res, next) => {
     status = 400;
     message = Object.values(err.errors).map((e) => e.message).join(", ");
   }
+  if (err.name === "MulterError") {
+    status = 400;
+    if (err.code === "LIMIT_FILE_SIZE") message = "Each image must be 5MB or smaller";
+    else if (err.code === "LIMIT_UNEXPECTED_FILE" || err.code === "LIMIT_FILE_COUNT")
+      message = "You can upload up to 5 images, and the form-data field name must be 'images'";
+  }
   if (err.name === "CastError") {
     status = 400;
     message = "Invalid ID";

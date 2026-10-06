@@ -1,9 +1,14 @@
 const Product = require("../models/Product");
 const Category = require("../models/Category");
 const asyncHandler = require("../utils/asyncHandler");
+const { PUBLIC_PATH } = require("../middleware/upload");
+const { removeUploadedFiles, removeFileByUrl, isRealImage } = require("../utils/files");
 
-// Only these fields can be set from the request body (blocks sneaky fields like merchant / ratings)
-const ALLOWED_FIELDS = ["name", "description", "price", "discountPrice", "category", "stock", "images", "isActive"];
+const MAX_IMAGES = 5;
+
+// Only these fields can be set from the request body (blocks sneaky fields like merchant / ratings).
+// Images are managed only through the upload endpoints below.
+const ALLOWED_FIELDS = ["name", "description", "price", "discountPrice", "category", "stock", "isActive"];
 
 const pick = (obj, keys) =>
   keys.reduce((acc, key) => {
@@ -148,5 +153,65 @@ exports.deleteProduct = asyncHandler(async (req, res) => {
   }
 
   await product.deleteOne();
+  await Promise.all(product.images.map(removeFileByUrl)); // remove its image files too
+
   res.json({ success: true, message: "Product deleted" });
+});
+
+// POST /api/products/:id/images  (owner merchant / admin)  form-data: images (1-5 files)
+exports.addProductImages = asyncHandler(async (req, res) => {
+  const files = req.files || [];
+
+  // if anything fails after multer saved the files, delete them so nothing is left behind
+  const fail = async (status, message) => {
+    await removeUploadedFiles(files);
+    return res.status(status).json({ success: false, message });
+  };
+
+  try {
+    const product = await Product.findById(req.params.id);
+
+    if (!product) return await fail(404, "Product not found");
+    if (!canManage(req.user, product)) return await fail(403, "You can only edit your own products");
+    if (files.length === 0) return await fail(400, "Please select at least one image (field name: images)");
+    if (product.images.length + files.length > MAX_IMAGES) {
+      return await fail(400, `A product can have at most ${MAX_IMAGES} images`);
+    }
+
+    for (const file of files) {
+      if (!(await isRealImage(file.path))) return await fail(400, "One of the files is not a valid image");
+    }
+
+    product.images.push(...files.map((file) => `${PUBLIC_PATH}/${file.filename}`));
+    await product.save();
+
+    res.status(201).json({ success: true, product });
+  } catch (error) {
+    await removeUploadedFiles(files);
+    throw error;
+  }
+});
+
+// DELETE /api/products/:id/images/:filename  (owner merchant / admin)
+exports.removeProductImage = asyncHandler(async (req, res) => {
+  const product = await Product.findById(req.params.id);
+
+  if (!product) {
+    return res.status(404).json({ success: false, message: "Product not found" });
+  }
+  if (!canManage(req.user, product)) {
+    return res.status(403).json({ success: false, message: "You can only edit your own products" });
+  }
+
+  const imageUrl = `${PUBLIC_PATH}/${req.params.filename}`;
+
+  if (!product.images.includes(imageUrl)) {
+    return res.status(404).json({ success: false, message: "Image not found on this product" });
+  }
+
+  product.images.pull(imageUrl);
+  await product.save();
+  await removeFileByUrl(imageUrl);
+
+  res.json({ success: true, product });
 });
