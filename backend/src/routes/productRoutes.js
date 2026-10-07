@@ -24,6 +24,5 @@ router.delete("/:id", ...sellerOnly, deleteProduct);
 
 // auth + role checks run BEFORE multer, so strangers can't write files to the server
 router.post("/:id/images", ...sellerOnly, uploadProductImages, addProductImages);
-router.delete("/:id/images/:filename", ...sellerOnly, removeProductImage);
-
+router.delete("/:id/images/:imageId", ...sellerOnly, removeProductImage);
 module.exports = router;

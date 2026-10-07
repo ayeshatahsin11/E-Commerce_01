@@ -1,8 +1,7 @@
 const Product = require("../models/Product");
 const Category = require("../models/Category");
 const asyncHandler = require("../utils/asyncHandler");
-const { PUBLIC_PATH } = require("../middleware/upload");
-const { removeUploadedFiles, removeFileByUrl, isRealImage } = require("../utils/files");
+const { saveImages, deleteImage, isRealImage } = require("../utils/imageStorage");
 
 const MAX_IMAGES = 5;
 
@@ -153,7 +152,7 @@ exports.deleteProduct = asyncHandler(async (req, res) => {
   }
 
   await product.deleteOne();
-  await Promise.all(product.images.map(removeFileByUrl)); // remove its image files too
+  await Promise.all(product.images.map(deleteImage)); // remove its images too
 
   res.json({ success: true, message: "Product deleted" });
 });
@@ -161,38 +160,39 @@ exports.deleteProduct = asyncHandler(async (req, res) => {
 // POST /api/products/:id/images  (owner merchant / admin)  form-data: images (1-5 files)
 exports.addProductImages = asyncHandler(async (req, res) => {
   const files = req.files || [];
+  const product = await Product.findById(req.params.id);
 
-  // if anything fails after multer saved the files, delete them so nothing is left behind
-  const fail = async (status, message) => {
-    await removeUploadedFiles(files);
-    return res.status(status).json({ success: false, message });
-  };
+  // nothing is saved anywhere until all these checks pass
+  if (!product) {
+    return res.status(404).json({ success: false, message: "Product not found" });
+  }
+  if (!canManage(req.user, product)) {
+    return res.status(403).json({ success: false, message: "You can only edit your own products" });
+  }
+  if (files.length === 0) {
+    return res.status(400).json({ success: false, message: "Please select at least one image (field name: images)" });
+  }
+  if (product.images.length + files.length > MAX_IMAGES) {
+    return res.status(400).json({ success: false, message: `A product can have at most ${MAX_IMAGES} images` });
+  }
+  if (files.some((file) => !isRealImage(file.buffer))) {
+    return res.status(400).json({ success: false, message: "One of the files is not a valid image" });
+  }
+
+  const saved = await saveImages(files);
+  product.images.push(...saved);
 
   try {
-    const product = await Product.findById(req.params.id);
-
-    if (!product) return await fail(404, "Product not found");
-    if (!canManage(req.user, product)) return await fail(403, "You can only edit your own products");
-    if (files.length === 0) return await fail(400, "Please select at least one image (field name: images)");
-    if (product.images.length + files.length > MAX_IMAGES) {
-      return await fail(400, `A product can have at most ${MAX_IMAGES} images`);
-    }
-
-    for (const file of files) {
-      if (!(await isRealImage(file.path))) return await fail(400, "One of the files is not a valid image");
-    }
-
-    product.images.push(...files.map((file) => `${PUBLIC_PATH}/${file.filename}`));
     await product.save();
-
-    res.status(201).json({ success: true, product });
   } catch (error) {
-    await removeUploadedFiles(files);
+    await Promise.all(saved.map(deleteImage)); // don't leave files that no product uses
     throw error;
   }
+
+  res.status(201).json({ success: true, product });
 });
 
-// DELETE /api/products/:id/images/:filename  (owner merchant / admin)
+// DELETE /api/products/:id/images/:imageId  (owner merchant / admin)
 exports.removeProductImage = asyncHandler(async (req, res) => {
   const product = await Product.findById(req.params.id);
 
@@ -203,15 +203,16 @@ exports.removeProductImage = asyncHandler(async (req, res) => {
     return res.status(403).json({ success: false, message: "You can only edit your own products" });
   }
 
-  const imageUrl = `${PUBLIC_PATH}/${req.params.filename}`;
+  const image = product.images.id(req.params.imageId);
 
-  if (!product.images.includes(imageUrl)) {
+  if (!image) {
     return res.status(404).json({ success: false, message: "Image not found on this product" });
   }
 
-  product.images.pull(imageUrl);
+  const removed = { publicId: image.publicId };
+  product.images.pull(image._id);
   await product.save();
-  await removeFileByUrl(imageUrl);
+  await deleteImage(removed);
 
   res.json({ success: true, product });
 });
