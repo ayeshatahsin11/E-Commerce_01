@@ -37,6 +37,7 @@ app.use("/api/categories", require("./src/routes/categoryRoutes"));
 app.use("/api/products", require("./src/routes/productRoutes"));
 app.use("/api/cart", require("./src/routes/cartRoutes"));
 app.use("/api/orders", require("./src/routes/orderRoutes"));
+app.use("/api/dashboard", require("./src/routes/dashboardRoutes"));
 
 // 404 + error handler (always last)
 app.use((req, res) => res.status(404).json({ success: false, message: "Route not found" }));
