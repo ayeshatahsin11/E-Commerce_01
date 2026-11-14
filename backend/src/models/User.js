@@ -20,6 +20,11 @@ const userSchema = new mongoose.Schema(
     },
     role: { type: String, enum: ["user", "merchant", "admin"], default: "user" },
 
+    // profile (used to pre-fill checkout)
+    phone: { type: String, trim: true, match: [/^[0-9+\-\s()]{7,20}$/, "Please enter a valid phone number"] },
+    address: { type: String, trim: true, maxlength: 250 },
+    city: { type: String, trim: true, maxlength: 60 },
+
     // merchant only
     shopName: { type: String, trim: true },
     approvalStatus: { type: String, enum: ["pending", "approved", "rejected"], default: "approved" },

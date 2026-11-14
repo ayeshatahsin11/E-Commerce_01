@@ -7,8 +7,9 @@ const orderItemSchema = new mongoose.Schema(
     product: { type: mongoose.Schema.Types.ObjectId, ref: "Product", required: true },
     name: { type: String, required: true },
     image: { type: String },
-    price: { type: Number, required: true, min: 0 },
-    quantity: { type: Number, required: true, min: 1 },
+    unit: { type: String },
+    price: { type: Number, required: true, min: 0 }, // price per unit
+    quantity: { type: Number, required: true, min: 0.01 },
   },
   { _id: false }
 );
@@ -36,6 +37,8 @@ const orderSchema = new mongoose.Schema(
       validate: { validator: (list) => list.length > 0, message: "An order needs at least one item" },
     },
     shippingAddress: { type: addressSchema, required: true },
+    deliveryZone: { type: String },
+    deliverySlot: { type: String },
     paymentMethod: { type: String, enum: ["cod"], default: "cod" },
     paymentStatus: { type: String, enum: ["pending", "paid"], default: "pending" },
     status: {
@@ -44,7 +47,9 @@ const orderSchema = new mongoose.Schema(
       default: "pending",
       index: true,
     },
-    total: { type: Number, required: true, min: 0 },
+    subtotal: { type: Number, min: 0 }, // items only
+    deliveryFee: { type: Number, min: 0, default: 0 },
+    total: { type: Number, required: true, min: 0 }, // subtotal + deliveryFee
     deliveredAt: { type: Date },
     cancelledAt: { type: Date },
   },
