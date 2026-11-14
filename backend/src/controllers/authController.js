@@ -2,19 +2,25 @@ const User = require("../models/User");
 const asyncHandler = require("../utils/asyncHandler");
 const { sendToken, cookieOptions } = require("../utils/sendToken");
 
+// Only accept real strings (blocks objects/arrays sent as email or password)
+const asString = (value) => (typeof value === "string" ? value : undefined);
 
 // POST /api/auth/register
 exports.register = asyncHandler(async (req, res) => {
- const { name, email, password, role, shopName } = req.body || {};   // in register
+  const body = req.body || {};
+  const name = asString(body.name);
+  const email = asString(body.email);
+  const password = asString(body.password);
+  const shopName = asString(body.shopName);
 
   if (!name || !email || !password) {
     return res.status(400).json({ success: false, message: "Name, email and password are required" });
   }
 
   // Only "user" or "merchant" can self-register. Admin is never allowed here.
-  const safeRole = role === "merchant" ? "merchant" : "user";
+  const safeRole = body.role === "merchant" ? "merchant" : "user";
 
-  if (safeRole === "merchant" && !shopName) {
+  if (safeRole === "merchant" && !(shopName && shopName.trim())) {
     return res.status(400).json({ success: false, message: "Shop name is required for merchants" });
   }
 
@@ -23,7 +29,7 @@ exports.register = asyncHandler(async (req, res) => {
     email: email.toLowerCase().trim(),
     password,
     role: safeRole,
-    shopName: safeRole === "merchant" ? shopName : undefined,
+    shopName: safeRole === "merchant" ? shopName.trim() : undefined,
     approvalStatus: safeRole === "merchant" ? "pending" : "approved",
   });
 
@@ -32,7 +38,8 @@ exports.register = asyncHandler(async (req, res) => {
 
 // POST /api/auth/login
 exports.login = asyncHandler(async (req, res) => {
-  const { email, password } = req.body || {};      
+  const email = asString((req.body || {}).email);
+  const password = asString((req.body || {}).password);
 
   if (!email || !password) {
     return res.status(400).json({ success: false, message: "Email and password are required" });
@@ -60,3 +67,52 @@ exports.logout = (req, res) => {
 exports.getMe = (req, res) => {
   res.json({ success: true, user: req.user });
 };
+
+// PUT /api/auth/profile   body: { name?, phone?, address?, city?, shopName? (merchant) }
+// Email and role cannot be changed here.
+exports.updateProfile = asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  const fields = ["name", "phone", "address", "city"];
+  if (req.user.role === "merchant") fields.push("shopName");
+
+  for (const field of fields) {
+    if (body[field] === undefined) continue;
+
+    const value = asString(body[field]);
+    if (value === undefined) {
+      return res.status(400).json({ success: false, message: `${field} must be text` });
+    }
+    req.user[field] = value;
+  }
+
+  if (req.user.role === "merchant" && !(req.user.shopName && req.user.shopName.trim())) {
+    return res.status(400).json({ success: false, message: "Shop name cannot be empty" });
+  }
+
+  await req.user.save();
+  res.json({ success: true, user: req.user });
+});
+
+// PUT /api/auth/password   body: { currentPassword, newPassword }
+exports.changePassword = asyncHandler(async (req, res) => {
+  const currentPassword = asString((req.body || {}).currentPassword);
+  const newPassword = asString((req.body || {}).newPassword);
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ success: false, message: "Current password and new password are required" });
+  }
+
+  const user = await User.findById(req.user._id).select("+password");
+
+  if (!(await user.matchPassword(currentPassword))) {
+    return res.status(400).json({ success: false, message: "Current password is incorrect" });
+  }
+  if (currentPassword === newPassword) {
+    return res.status(400).json({ success: false, message: "New password must be different from the current one" });
+  }
+
+  user.password = newPassword; // length is checked by the model, then it is hashed on save
+  await user.save();
+
+  sendToken(user, 200, res); // fresh login cookie
+});

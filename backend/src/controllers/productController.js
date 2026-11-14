@@ -7,14 +7,22 @@ const MAX_IMAGES = 5;
 
 // Only these fields can be set from the request body (blocks sneaky fields like merchant / ratings).
 // Images are managed only through the upload endpoints below.
-const ALLOWED_FIELDS = ["name", "description", "price", "discountPrice", "category", "stock", "isActive"];
+const ALLOWED_FIELDS = [
+  "name", "description", "price", "discountPrice", "category", "stock", "isActive",
+  "unit", "minOrderQty", "step", "isOrganic", "isFeatured", "origin", "freshness",
+];
 
 const pick = (obj, keys) =>
   keys.reduce((acc, key) => {
     if (obj[key] !== undefined) acc[key] = obj[key];
     return acc;
   }, {});
-
+// Only an admin can mark a product as featured
+const cleanBody = (body, user) => {
+  const data = pick(body || {}, ALLOWED_FIELDS);
+  if (user.role !== "admin") delete data.isFeatured;
+  return data;
+};
 const SORT_OPTIONS = {
   newest: "-createdAt",
   oldest: "createdAt",
@@ -45,7 +53,11 @@ exports.getProducts = asyncHandler(async (req, res) => {
   if (search) filter.name = { $regex: escapeRegex(search), $options: "i" };
   if (category) filter.category = category;
   if (merchant) filter.merchant = merchant;
-
+  const freshness = asString(req.query.freshness);
+  if (freshness) filter.freshness = freshness;
+  if (req.query.organic === "true") filter.isOrganic = true;
+  if (req.query.featured === "true") filter.isFeatured = true;
+  if (req.query.inStock === "true") filter.stock = { $gt: 0 };
   if (minPrice !== undefined || maxPrice !== undefined) {
     const min = minPrice !== undefined ? Number(minPrice) : undefined;
     const max = maxPrice !== undefined ? Number(maxPrice) : undefined;
@@ -103,7 +115,7 @@ exports.getProduct = asyncHandler(async (req, res) => {
 
 // POST /api/products  (approved merchant / admin)
 exports.createProduct = asyncHandler(async (req, res) => {
-  const data = pick(req.body || {}, ALLOWED_FIELDS);
+  const data = cleanBody(req.body, req.user);
 
   const categoryExists = await Category.exists({ _id: data.category });
   if (!categoryExists) {
@@ -125,7 +137,7 @@ exports.updateProduct = asyncHandler(async (req, res) => {
     return res.status(403).json({ success: false, message: "You can only edit your own products" });
   }
 
-  const data = pick(req.body || {}, ALLOWED_FIELDS);
+ const data = cleanBody(req.body, req.user);
 
   if (data.category) {
     const categoryExists = await Category.exists({ _id: data.category });

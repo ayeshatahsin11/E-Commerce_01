@@ -2,6 +2,8 @@ const Cart = require("../models/Cart");
 const Product = require("../models/Product");
 const asyncHandler = require("../utils/asyncHandler");
 const { round2, unitPrice } = require("../utils/price");
+const { round3, hasStock, checkQuantity } = require("../utils/quantity");
+const { FREE_DELIVERY_ABOVE } = require("../config/delivery");
 
 const getOrCreateCart = async (userId) => {
   let cart = await Cart.findOne({ user: userId });
@@ -16,16 +18,20 @@ const getOrCreateCart = async (userId) => {
   return cart;
 };
 
+const stockMessage = (product) =>
+  product.stock < 0.001 ? "This product is out of stock" : `Only ${product.stock} ${product.unit} in stock`;
+
 // Builds the response: current product info, prices, totals and any problems (deleted, hidden, low stock)
 const buildCartView = async (cart) => {
   const ids = cart.items.map((item) => item.product);
   const products = ids.length
-    ? await Product.find({ _id: { $in: ids } }).select("name price discountPrice images stock isActive")
+    ? await Product.find({ _id: { $in: ids } }).select(
+        "name price discountPrice images stock isActive unit minOrderQty step"
+      )
     : [];
   const byId = new Map(products.map((p) => [p._id.toString(), p]));
 
   let subtotal = 0;
-  let itemCount = 0;
   let canCheckout = cart.items.length > 0;
 
   const items = cart.items.map((item) => {
@@ -33,13 +39,12 @@ const buildCartView = async (cart) => {
 
     let issue = null;
     if (!product || !product.isActive) issue = "This product is no longer available";
-    else if (product.stock === 0) issue = "Out of stock";
-    else if (product.stock < item.quantity) issue = `Only ${product.stock} left in stock`;
+    else if (product.stock < 0.001) issue = "Out of stock";
+    else if (!hasStock(product.stock, item.quantity)) issue = `Only ${product.stock} ${product.unit} left in stock`;
 
     const price = product ? unitPrice(product) : 0;
     const lineTotal = round2(price * item.quantity);
 
-    itemCount += item.quantity;
     if (issue) canCheckout = false;
     else subtotal += lineTotal;
 
@@ -47,7 +52,10 @@ const buildCartView = async (cart) => {
       productId: item.product,
       name: product ? product.name : null,
       image: product && product.images.length ? product.images[0].url : null,
-      unitPrice: price,
+      unit: product ? product.unit : null,
+      minOrderQty: product ? product.minOrderQty : null,
+      step: product ? product.step : null,
+      unitPrice: price, // price per unit
       originalPrice: product ? product.price : null,
       quantity: item.quantity,
       stock: product ? product.stock : 0,
@@ -56,13 +64,13 @@ const buildCartView = async (cart) => {
     };
   });
 
-  return { items, itemCount, subtotal: round2(subtotal), canCheckout };
-};
-
-const parseQuantity = (value, fallback) => {
-  if (value === undefined) return fallback;
-  const quantity = Number(value);
-  return Number.isInteger(quantity) && quantity >= 1 ? quantity : null;
+  return {
+    items,
+    itemCount: items.length, // number of different products (for the navbar badge)
+    subtotal: round2(subtotal),
+    freeDeliveryAbove: FREE_DELIVERY_ABOVE, // frontend can show "add X more for free delivery"
+    canCheckout,
+  };
 };
 
 // GET /api/cart
@@ -71,16 +79,12 @@ exports.getCart = asyncHandler(async (req, res) => {
   res.json({ success: true, cart: await buildCartView(cart) });
 });
 
-// POST /api/cart/items   body: { productId, quantity? }
+// POST /api/cart/items   body: { productId, quantity? }   (quantity defaults to the product's minimum)
 exports.addItem = asyncHandler(async (req, res) => {
-  const { productId } = req.body || {};
-  const quantity = parseQuantity((req.body || {}).quantity, 1);
+  const { productId, quantity: rawQuantity } = req.body || {};
 
   if (!productId) {
     return res.status(400).json({ success: false, message: "productId is required" });
-  }
-  if (quantity === null) {
-    return res.status(400).json({ success: false, message: "Quantity must be a whole number of at least 1" });
   }
 
   const product = await Product.findById(productId);
@@ -88,19 +92,21 @@ exports.addItem = asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: "Product not found" });
   }
 
+  const checked = checkQuantity(product, rawQuantity === undefined ? product.minOrderQty : rawQuantity);
+  if (checked.error) {
+    return res.status(400).json({ success: false, message: checked.error });
+  }
+
   const cart = await getOrCreateCart(req.user._id);
   const existing = cart.items.find((item) => item.product.equals(product._id));
-  const newQuantity = (existing ? existing.quantity : 0) + quantity;
+  const newQuantity = round3((existing ? existing.quantity : 0) + checked.value);
 
-  if (newQuantity > product.stock) {
-    return res.status(400).json({
-      success: false,
-      message: product.stock === 0 ? "This product is out of stock" : `Only ${product.stock} in stock`,
-    });
+  if (!hasStock(product.stock, newQuantity)) {
+    return res.status(400).json({ success: false, message: stockMessage(product) });
   }
 
   if (existing) existing.quantity = newQuantity;
-  else cart.items.push({ product: product._id, quantity });
+  else cart.items.push({ product: product._id, quantity: checked.value });
 
   await cart.save();
   res.status(201).json({ success: true, cart: await buildCartView(cart) });
@@ -108,12 +114,6 @@ exports.addItem = asyncHandler(async (req, res) => {
 
 // PATCH /api/cart/items/:productId   body: { quantity }
 exports.updateItem = asyncHandler(async (req, res) => {
-  const quantity = parseQuantity((req.body || {}).quantity, null);
-
-  if (quantity === null) {
-    return res.status(400).json({ success: false, message: "Quantity must be a whole number of at least 1 (use DELETE to remove)" });
-  }
-
   const cart = await getOrCreateCart(req.user._id);
   const item = cart.items.find((entry) => entry.product.equals(req.params.productId));
 
@@ -125,11 +125,16 @@ exports.updateItem = asyncHandler(async (req, res) => {
   if (!product || !product.isActive) {
     return res.status(400).json({ success: false, message: "This product is no longer available" });
   }
-  if (quantity > product.stock) {
-    return res.status(400).json({ success: false, message: `Only ${product.stock} in stock` });
+
+  const checked = checkQuantity(product, (req.body || {}).quantity);
+  if (checked.error) {
+    return res.status(400).json({ success: false, message: checked.error });
+  }
+  if (!hasStock(product.stock, checked.value)) {
+    return res.status(400).json({ success: false, message: stockMessage(product) });
   }
 
-  item.quantity = quantity;
+  item.quantity = checked.value;
   await cart.save();
   res.json({ success: true, cart: await buildCartView(cart) });
 });
