@@ -11,9 +11,12 @@ const errorHandler = require("./src/middleware/errorHandler");
 
 const app = express();
 
+// Behind a proxy (Render, Railway...) so the rate limiter sees the real visitor IP
+if (process.env.NODE_ENV === "production") app.set("trust proxy", 1);
+
 // Middlewares
 app.use(helmet());
-app.use(cors({ origin: process.env.CLIENT_URL, credentials: true }));
+app.use(cors({ origin: process.env.CLIENT_URL || "http://localhost:3000", credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
 
@@ -38,6 +41,8 @@ app.use("/api/products", require("./src/routes/productRoutes"));
 app.use("/api/cart", require("./src/routes/cartRoutes"));
 app.use("/api/orders", require("./src/routes/orderRoutes"));
 app.use("/api/dashboard", require("./src/routes/dashboardRoutes"));
+app.use("/api/wishlist", require("./src/routes/wishlistRoutes"));
+app.use("/api/delivery", require("./src/routes/deliveryRoutes"));
 
 // 404 + error handler (always last)
 app.use((req, res) => res.status(404).json({ success: false, message: "Route not found" }));
@@ -49,4 +54,3 @@ const PORT = process.env.PORT || 5000;
 connectDB().then(() => {
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 });
-

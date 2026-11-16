@@ -4,7 +4,8 @@ const Order = require("../models/Order");
 const Product = require("../models/Product");
 const asyncHandler = require("../utils/asyncHandler");
 const { round2, unitPrice } = require("../utils/price");
-
+const { EPS, hasStock, checkQuantity } = require("../utils/quantity");
+const { FREE_DELIVERY_ABOVE, findZone, findSlot } = require("../config/delivery");
 const STATUSES = ["pending", "confirmed", "shipped", "delivered", "cancelled"];
 
 // Which status can move to which
@@ -65,13 +66,22 @@ const changeStatus = async (order, next) => {
   return true;
 };
 
-// POST /api/orders   body: { shippingAddress: {...}, paymentMethod?: "cod" }
+// POST /api/orders   body: { shippingAddress: {...}, deliveryZone, deliverySlot, paymentMethod?: "cod" }
 exports.placeOrder = asyncHandler(async (req, res) => {
-  const { shippingAddress, paymentMethod = "cod" } = req.body || {};
+  const { shippingAddress, deliveryZone, deliverySlot, paymentMethod = "cod" } = req.body || {};
 
   const address = cleanAddress(shippingAddress);
   if (address.error) {
     return res.status(400).json({ success: false, message: address.error });
+  }
+
+  const zone = findZone(deliveryZone);
+  if (!zone) {
+    return res.status(400).json({ success: false, message: "Please choose a valid delivery area" });
+  }
+  const slot = findSlot(deliverySlot);
+  if (!slot) {
+    return res.status(400).json({ success: false, message: "Please choose a delivery time slot" });
   }
   if (paymentMethod !== "cod") {
     return res.status(400).json({ success: false, message: "Only cash on delivery (cod) is supported right now" });
@@ -105,9 +115,17 @@ exports.placeOrder = asyncHandler(async (req, res) => {
     const problems = [];
     for (const item of claimedItems) {
       const product = byId.get(item.product.toString());
-      if (!product || !product.isActive) problems.push("An item in your cart is no longer available");
-      else if (product.stock < item.quantity) {
-        problems.push(product.stock === 0 ? `${product.name} is out of stock` : `${product.name}: only ${product.stock} left`);
+      if (!product || !product.isActive) {
+        problems.push("An item in your cart is no longer available");
+      } else if (!hasStock(product.stock, item.quantity)) {
+        problems.push(
+          product.stock < 0.001
+            ? `${product.name} is out of stock`
+            : `${product.name}: only ${product.stock} ${product.unit} left`
+        );
+      } else {
+        const check = checkQuantity(product, item.quantity); // min order / step may have changed
+        if (check.error) problems.push(`${product.name}: ${check.error}`);
       }
     }
     if (problems.length > 0) {
@@ -118,7 +136,7 @@ exports.placeOrder = asyncHandler(async (req, res) => {
     // 2) reserve stock (atomic per product: it only succeeds while enough stock is left)
     for (const item of claimedItems) {
       const result = await Product.updateOne(
-        { _id: item.product, isActive: true, stock: { $gte: item.quantity } },
+        { _id: item.product, isActive: true, stock: { $gte: item.quantity - EPS } },
         { $inc: { stock: -item.quantity } }
       );
       if (result.modifiedCount !== 1) {
@@ -142,21 +160,32 @@ exports.placeOrder = asyncHandler(async (req, res) => {
         product: product._id,
         name: product.name,
         image: product.images.length ? product.images[0].url : undefined,
+        unit: product.unit,
         price: unitPrice(product),
         quantity: item.quantity,
       });
     }
 
+    // delivery fee is charged per order; free when that order's items reach the free-delivery amount
     const orders = await Order.create(
-      [...groups].map(([merchant, items]) => ({
-        checkoutId,
-        user: req.user._id,
-        merchant,
-        items,
-        shippingAddress: address.value,
-        paymentMethod,
-        total: round2(items.reduce((sum, item) => sum + item.price * item.quantity, 0)),
-      }))
+      [...groups].map(([merchant, items]) => {
+        const subtotal = round2(items.reduce((sum, item) => sum + item.price * item.quantity, 0));
+        const deliveryFee = subtotal >= FREE_DELIVERY_ABOVE ? 0 : zone.fee;
+
+        return {
+          checkoutId,
+          user: req.user._id,
+          merchant,
+          items,
+          shippingAddress: address.value,
+          deliveryZone: zone.key,
+          deliverySlot: slot.key,
+          paymentMethod,
+          subtotal,
+          deliveryFee,
+          total: round2(subtotal + deliveryFee),
+        };
+      })
     );
 
     res.status(201).json({
@@ -170,7 +199,6 @@ exports.placeOrder = asyncHandler(async (req, res) => {
     throw error;
   }
 });
-
 // GET /api/orders/my?status=&page=&limit=   (customer: own orders)
 exports.getMyOrders = asyncHandler(async (req, res) => {
   const { page, limit } = getPaging(req.query);
