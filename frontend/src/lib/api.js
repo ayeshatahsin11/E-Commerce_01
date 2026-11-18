@@ -35,6 +35,8 @@ async function request(path, { method = "GET", body, query, signal } = {}) {
     });
   } catch (error) {
     if (error.name === "AbortError") throw error;
+    // the real reason (CORS, wrong port, server down) is shown in the browser console
+    console.error(`API request failed: ${method} ${url}`, error);
     throw new ApiError("Cannot reach the server. Please check your connection.", 0);
   }
 
