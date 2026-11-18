@@ -21,4 +21,7 @@ const upload = multer({
 // form-data field name must be "images"
 const uploadProductImages = upload.array("images", 5);
 
-module.exports = { uploadProductImages };
+// form-data field name must be "image" (one banner image)
+const uploadBannerImage = upload.single("image");
+
+module.exports = { uploadProductImages, uploadBannerImage };
